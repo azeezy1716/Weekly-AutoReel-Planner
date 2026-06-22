@@ -37,7 +37,11 @@ if (!fs.existsSync(POSTS_FILE)) {
 
 app.use(
   cors({
-    origin: CLIENT_URL,
+    origin: [
+      "http://localhost:5173",
+      "https://azeezy1716.github.io"
+    ],
+    credentials: true
   })
 );
 
