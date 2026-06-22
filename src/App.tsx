@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-const API_BASE_URL = "http://localhost:4000";
+const API_BASE_URL = "https://weekly-autoreel-planner.onrender.com";
 
 type View = "dashboard" | "videos" | "accounts" | "queue" | "caption-studio" | "settings";
 
