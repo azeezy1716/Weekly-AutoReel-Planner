@@ -221,12 +221,6 @@ function formatDateTime(value: string) {
   });
 }
 
-function formatDayLabel(dateStr: string) {
-  if (!dateStr) return "";
-  const d = new Date(dateStr);
-  return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
-}
-
 function getDayName(dateStr: string) {
   if (!dateStr) return "";
   return new Date(dateStr).toLocaleDateString("en-US", { weekday: "long" });
