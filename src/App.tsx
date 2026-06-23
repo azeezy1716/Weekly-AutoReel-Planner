@@ -1,13 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-const API_BASE_URL = "https://weekly-autoreel-planner.onrender.com";
+const API_BASE_URL = "http://localhost:4000";
+const APP_NAME = "AZ Weekly AutoReel";
+const GEMINI_API_KEY = (import.meta.env.VITE_GEMINI_API_KEY as string) || "";
 
 type View = "dashboard" | "videos" | "accounts" | "queue" | "caption-studio" | "settings";
 
-type ContentPlatform = "YouTube Shorts" | "TikTok" | "Instagram Reels" | "Facebook Reels";
+type ContentPlatform = "YouTube Shorts" | "YouTube Video" | "TikTok" | "Instagram Reels" | "Facebook Reels";
 
 const contentPlatforms: ContentPlatform[] = [
   "YouTube Shorts",
+  "YouTube Video",
   "TikTok",
   "Instagram Reels",
   "Facebook Reels",
@@ -41,6 +44,9 @@ type ScheduledPost = {
   updatedAt: string;
 };
 
+type CaptionPosition = "top" | "bottom" | "center";
+type CaptionStyle = "modern" | "bold" | "minimal" | "classic" | "cinematic";
+
 type PlannedVideo = {
   id: string;
   file: File;
@@ -52,12 +58,22 @@ type PlannedVideo = {
   description: string;
   tags: string;
   captionText: string;
+  captionPosition: CaptionPosition;
+  captionStyle: CaptionStyle;
   processedVideoUrl: string;
   processedFilename: string;
   scheduledAt: string;
   privacyStatus: "private" | "unlisted" | "public";
   status: "Draft" | "Scheduled";
 };
+
+type NotificationItem = {
+  id: string;
+  message: string;
+  type: "success" | "error" | "info";
+};
+
+type Plan = "free" | "pro";
 
 const usaPostingTimes = [{ hour: 12 }, { hour: 15 }, { hour: 18 }, { hour: 21 }];
 
@@ -100,100 +116,6 @@ function titleCase(text: string) {
     .filter(Boolean)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
-}
-
-function generatePack(topicInput: string, platform: ContentPlatform = "YouTube Shorts") {
-  const cleanedTopic = cleanFilename(topicInput);
-  const topic = titleCase(cleanedTopic);
-  const lowerTopic = topic.toLowerCase();
-
-  let hook = "Watch this till the end.";
-  let title = topic;
-  let baseHashtags = ["#Shorts", "#ViralShorts", "#ShortFormContent"];
-
-  if (
-    lowerTopic.includes("friend") ||
-    lowerTopic.includes("photo") ||
-    lowerTopic.includes("left out") ||
-    lowerTopic.includes("one left")
-  ) {
-    title = "One Friend Was Left Out";
-    hook = "Everyone smiled, but one person felt it.";
-    baseHashtags = ["#Friendship", "#Relatable", "#POV", "#Shorts"];
-  }
-
-  if (
-    lowerTopic.includes("message") ||
-    lowerTopic.includes("phone") ||
-    lowerTopic.includes("alone") ||
-    lowerTopic.includes("sad") ||
-    lowerTopic.includes("silent")
-  ) {
-    title = lowerTopic.includes("message")
-      ? "He Typed The Message But Never Sent It"
-      : topic;
-    hook = "Some feelings are quiet, but heavy.";
-    baseHashtags = ["#DeepQuotes", "#RealFeelings", "#LonelyVibes", "#Shorts"];
-  }
-
-  if (
-    lowerTopic.includes("rat") ||
-    lowerTopic.includes("chef") ||
-    lowerTopic.includes("kitchen") ||
-    lowerTopic.includes("cat")
-  ) {
-    title = topic;
-    hook = "The tiny chef has one serious problem.";
-    baseHashtags = ["#TinyChefRat", "#AnimatedStory", "#FunnyAnimation", "#RatChef", "#Shorts"];
-  }
-
-  if (
-    lowerTopic.includes("football") ||
-    lowerTopic.includes("soccer") ||
-    lowerTopic.includes("goal") ||
-    lowerTopic.includes("stadium") ||
-    lowerTopic.includes("world cup")
-  ) {
-    title = topic;
-    hook = "Football fans will understand this feeling.";
-    baseHashtags = ["#Football", "#Soccer", "#WorldCup", "#FootballFans", "#Shorts"];
-  }
-
-  if (
-    lowerTopic.includes("rust") ||
-    lowerTopic.includes("clean") ||
-    lowerTopic.includes("satisfying") ||
-    lowerTopic.includes("asmr")
-  ) {
-    title = topic;
-    hook = "This cleaning moment is too satisfying.";
-    baseHashtags = ["#Satisfying", "#OddlySatisfying", "#ASMR", "#CleanTok", "#Shorts"];
-  }
-
-  const platformHashtags: Record<ContentPlatform, string[]> = {
-    "YouTube Shorts": ["#YouTubeShorts", "#Shorts"],
-    TikTok: ["#TikTok", "#FYP", "#ForYou"],
-    "Instagram Reels": ["#Reels", "#InstagramReels", "#ExplorePage"],
-    "Facebook Reels": ["#FacebookReels", "#ReelsVideo", "#WatchThis"],
-  };
-
-  const finalHashtags = Array.from(
-    new Set([...baseHashtags, ...platformHashtags[platform]])
-  ).slice(0, 9);
-
-  const descriptionByPlatform: Record<ContentPlatform, string> = {
-    "YouTube Shorts": `${hook}\n\n${topic}\n\n${finalHashtags.join(" ")}`,
-    TikTok: `POV: ${topic.toLowerCase()}\n\n${hook}\n\n${finalHashtags.join(" ")}`,
-    "Instagram Reels": `${hook}\n\n${topic}\n\nSave this if you felt it.\n\n${finalHashtags.join(" ")}`,
-    "Facebook Reels": `${hook}\n\n${topic}\n\nWhat would you do?\n\n${finalHashtags.join(" ")}`,
-  };
-
-  return {
-    title: title.slice(0, 90),
-    description: descriptionByPlatform[platform],
-    tags: finalHashtags.join(" "),
-    captionText: hook,
-  };
 }
 
 function getNextWeekSchedule(index: number) {
@@ -242,6 +164,195 @@ function copyToClipboard(text: string) {
   navigator.clipboard.writeText(text).catch(() => {});
 }
 
+// ==================== AI GENERATION ====================
+async function generateWithGemini(topic: string, platform: string): Promise<{ title: string; description: string; tags: string; captionText: string } | null> {
+  if (!GEMINI_API_KEY) return null;
+  try {
+    const prompt = `You are a professional social media content creator. Create engaging content for a video about: "${topic}".
+Platform: ${platform}.
+Requirements:
+- Title: catchy, under 90 characters, no timestamps, no random numbers, no channel names, no "posted by" text
+- Description: 2-3 engaging sentences that hook the viewer, platform-appropriate tone
+- Tags: 5-8 highly relevant hashtags as a single space-separated string (e.g. #Shorts #Viral)
+- CaptionText: one short hook sentence (under 60 chars) to burn onto the video as on-screen text
+
+Return ONLY a JSON object with keys: title, description, tags, captionText. No markdown, no explanation.`;
+
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.85, maxOutputTokens: 512 },
+        }),
+      }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    const jsonMatch = text.match(/\{[\s\S]*?\}/);
+    if (!jsonMatch) return null;
+    const parsed = JSON.parse(jsonMatch[0]);
+    return {
+      title: (parsed.title || topic).slice(0, 90),
+      description: parsed.description || "",
+      tags: parsed.tags || parsed.hashtags || "",
+      captionText: parsed.captionText || parsed.hook || "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+const HOOK_TEMPLATES: Record<string, string[]> = {
+  general: [
+    "This changed everything I thought I knew.",
+    "Wait for the ending.",
+    "The result surprised everyone.",
+    "You need to see this.",
+    "This is why consistency wins.",
+    "The moment that made it all worth it.",
+    "I did not expect this to happen.",
+    "This is the shortcut nobody talks about.",
+    "Watch this till the end.",
+  ],
+  emotional: [
+    "Some feelings are quiet, but heavy.",
+    "Everyone smiled, but one person felt it.",
+    "He typed the message but never sent it.",
+    "The silence said more than words ever could.",
+    "Sometimes the smallest moments hit the hardest.",
+  ],
+  food: [
+    "The secret ingredient is always patience.",
+    "This recipe hits different every single time.",
+    "One bite and you will understand why.",
+    "The kitchen smelled like home after this.",
+    "Simple ingredients, unforgettable flavor.",
+  ],
+  sports: [
+    "Football fans will understand this feeling.",
+    "That moment when the game changes forever.",
+    "Pressure is a privilege.",
+    "This play still gives me chills.",
+    "Champions are made in moments like this.",
+  ],
+  satisfying: [
+    "This cleaning moment is too satisfying.",
+    "Oddly satisfying and impossible to stop watching.",
+    "The before and after will shock you.",
+    "This transformation is pure therapy.",
+    "Satisfying enough to watch on repeat.",
+  ],
+  travel: [
+    "This view made the whole trip worth it.",
+    "The kind of place that steals your breath.",
+    "Wanderlust activated.",
+    "I did not want to leave.",
+    "Every traveler needs to see this once.",
+  ],
+  fitness: [
+    "The rep that changes everything.",
+    "Your only competition is yesterday.",
+    "This workout destroyed me in the best way.",
+    "Small steps, massive results.",
+    "The burn is where the growth lives.",
+  ],
+  tech: [
+    "This feature changes everything.",
+    "The trick every developer needs to know.",
+    "Simple code, powerful result.",
+    "This tool just saved me hours.",
+    "The future of tech is already here.",
+  ],
+  business: [
+    "The mindset shift that changed my income.",
+    "This one habit separates winners from the rest.",
+    "The real reason most businesses fail.",
+    "Small tweaks, massive profits.",
+    "The strategy nobody is talking about.",
+  ],
+};
+
+const TITLE_TEMPLATES = [
+  (t: string) => `${t} — The Truth`,
+  (t: string) => `Why ${t} Matters More Than You Think`,
+  (t: string) => `The ${t} Secret Nobody Shares`,
+  (t: string) => `I Tried ${t} For 30 Days`,
+  (t: string) => `${t} Changed Everything`,
+  (t: string) => `This Is What ${t} Really Looks Like`,
+  (t: string) => `The Real Reason ${t} Works`,
+  (t: string) => `${t} Explained In 60 Seconds`,
+  (t: string) => `The ${t} Hack You Need`,
+  (t: string) => `What ${t} Actually Looks Like`,
+];
+
+function detectCategory(topic: string): string {
+  const lower = topic.toLowerCase();
+  if (lower.match(/friend|alone|sad|message|phone|left out|heart|love|break|cry|feel/)) return "emotional";
+  if (lower.match(/cook|chef|kitchen|food|recipe|eat|meal|dish|bake|grill/)) return "food";
+  if (lower.match(/football|soccer|goal|sport|basketball|nba|game|match|team|player/)) return "sports";
+  if (lower.match(/clean|satisfying|asmr|restoration|rust|repair|fix|transform/)) return "satisfying";
+  if (lower.match(/travel|trip|vacation|beach|mountain|city|hotel|flight|adventure/)) return "travel";
+  if (lower.match(/fitness|gym|workout|health|exercise|muscle|cardio|lift|train/)) return "fitness";
+  if (lower.match(/tech|code|app|ai|software|programming|developer|web|digital/)) return "tech";
+  if (lower.match(/money|finance|invest|business|entrepreneur|startup|side.hustle|income/)) return "business";
+  return "general";
+}
+
+function generatePack(topicInput: string, platform: ContentPlatform = "YouTube Shorts", variation = 0) {
+  const cleanedTopic = cleanFilename(topicInput);
+  const topic = titleCase(cleanedTopic);
+  const category = detectCategory(topic);
+  const hooks = HOOK_TEMPLATES[category] || HOOK_TEMPLATES.general;
+  const hook = hooks[variation % hooks.length];
+  const titleFn = TITLE_TEMPLATES[variation % TITLE_TEMPLATES.length];
+  const title = titleFn(topic).slice(0, 90);
+
+  const baseHashtags = ["#Shorts", "#ViralShorts", "#ShortFormContent"];
+  const categoryTags: Record<string, string[]> = {
+    emotional: ["#DeepQuotes", "#RealFeelings", "#Relatable", "#POV"],
+    food: ["#FoodTok", "#Recipe", "#Cooking", "#Foodie"],
+    sports: ["#Sports", "#Football", "#Soccer", "#GameDay"],
+    satisfying: ["#Satisfying", "#OddlySatisfying", "#ASMR", "#CleanTok"],
+    travel: ["#Travel", "#Wanderlust", "#Adventure", "#Explore"],
+    fitness: ["#Fitness", "#GymTok", "#Workout", "#Health"],
+    tech: ["#Tech", "#Coding", "#AI", "#Developer"],
+    business: ["#Business", "#Entrepreneur", "#Money", "#Success"],
+    general: ["#Viral", "#Trending", "#Content", "#Creator"],
+  };
+
+  const platformHashtags: Record<string, string[]> = {
+    "YouTube Shorts": ["#YouTubeShorts", "#Shorts"],
+    "YouTube Video": ["#YouTube", "#Video"],
+    TikTok: ["#TikTok", "#FYP", "#ForYou"],
+    "Instagram Reels": ["#Reels", "#InstagramReels", "#ExplorePage"],
+    "Facebook Reels": ["#FacebookReels", "#ReelsVideo", "#WatchThis"],
+  };
+
+  const finalHashtags = Array.from(
+    new Set([...baseHashtags, ...(categoryTags[category] || []), ...(platformHashtags[platform] || [])])
+  ).slice(0, 9);
+
+  const descShorts = `${hook}\n\n${topic}\n\n${finalHashtags.join(" ")}`;
+  const descLong = `In this video, we dive into ${topic.toLowerCase()} and uncover what most people miss.\n\n${hook}\n\n${finalHashtags.join(" ")}`;
+  const descTikTok = `POV: ${topic.toLowerCase()}\n\n${hook}\n\n${finalHashtags.join(" ")}`;
+  const descIG = `${hook}\n\n${topic}\n\nSave this if you felt it.\n\n${finalHashtags.join(" ")}`;
+  const descFB = `${hook}\n\n${topic}\n\nWhat would you do?\n\n${finalHashtags.join(" ")}`;
+
+  const descriptionMap: Record<ContentPlatform, string> = {
+    "YouTube Shorts": descShorts,
+    "YouTube Video": descLong,
+    TikTok: descTikTok,
+    "Instagram Reels": descIG,
+    "Facebook Reels": descFB,
+  };
+
+  return { title, description: descriptionMap[platform], tags: finalHashtags.join(" "), captionText: hook };
+}
+
 // ==================== ICONS ====================
 function Icon({ name, size = 20, color = "currentColor" }: { name: string; size?: number; color?: string }) {
   const s: React.SVGProps<SVGSVGElement> = {
@@ -256,244 +367,267 @@ function Icon({ name, size = 20, color = "currentColor" }: { name: string; size?
   };
   switch (name) {
     case "dashboard":
-      return (
-        <svg {...s}>
-          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-          <polyline points="9 22 9 12 15 12 15 22" />
-        </svg>
-      );
+      return <svg {...s}><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" /></svg>;
     case "video":
-      return (
-        <svg {...s}>
-          <rect x="2" y="2" width="20" height="20" rx="2.18" />
-          <path d="M7 2v20M17 2v20M2 12h20M2 7h5M2 17h5M17 17h5M17 7h5" />
-        </svg>
-      );
+      return <svg {...s}><rect x="2" y="2" width="20" height="20" rx="2.18" /><path d="M7 2v20M17 2v20M2 12h20M2 7h5M2 17h5M17 17h5M17 7h5" /></svg>;
     case "users":
-      return (
-        <svg {...s}>
-          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-          <circle cx="9" cy="7" r="4" />
-          <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-          <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-        </svg>
-      );
+      return <svg {...s}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>;
     case "list":
-      return (
-        <svg {...s}>
-          <line x1="8" y1="6" x2="21" y2="6" />
-          <line x1="8" y1="12" x2="21" y2="12" />
-          <line x1="8" y1="18" x2="21" y2="18" />
-          <line x1="3" y1="6" x2="3.01" y2="6" />
-          <line x1="3" y1="12" x2="3.01" y2="12" />
-          <line x1="3" y1="18" x2="3.01" y2="18" />
-        </svg>
-      );
+      return <svg {...s}><line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" /><line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" /></svg>;
     case "type":
-      return (
-        <svg {...s}>
-          <path d="M4 7V4h16v3" />
-          <path d="M9 20h6" />
-          <path d="M12 4v16" />
-        </svg>
-      );
+      return <svg {...s}><path d="M4 7V4h16v3" /><path d="M9 20h6" /><path d="M12 4v16" /></svg>;
     case "settings":
-      return (
-        <svg {...s}>
-          <circle cx="12" cy="12" r="3" />
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-        </svg>
-      );
+      return <svg {...s}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>;
     case "upload":
-      return (
-        <svg {...s}>
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-          <polyline points="17 8 12 3 7 8" />
-          <line x1="12" y1="3" x2="12" y2="15" />
-        </svg>
-      );
+      return <svg {...s}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>;
     case "trash":
-      return (
-        <svg {...s}>
-          <polyline points="3 6 5 6 21 6" />
-          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-          <line x1="10" y1="11" x2="10" y2="17" />
-          <line x1="14" y1="11" x2="14" y2="17" />
-        </svg>
-      );
+      return <svg {...s}><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>;
     case "refresh":
-      return (
-        <svg {...s}>
-          <polyline points="23 4 23 10 17 10" />
-          <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-        </svg>
-      );
+      return <svg {...s}><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>;
     case "copy":
-      return (
-        <svg {...s}>
-          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-        </svg>
-      );
+      return <svg {...s}><rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>;
     case "check":
-      return (
-        <svg {...s}>
-          <polyline points="20 6 9 17 4 12" />
-        </svg>
-      );
+      return <svg {...s}><polyline points="20 6 9 17 4 12" /></svg>;
     case "x":
-      return (
-        <svg {...s}>
-          <line x1="18" y1="6" x2="6" y2="18" />
-          <line x1="6" y1="6" x2="18" y2="18" />
-        </svg>
-      );
+      return <svg {...s}><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>;
     case "plus":
-      return (
-        <svg {...s}>
-          <line x1="12" y1="5" x2="12" y2="19" />
-          <line x1="5" y1="12" x2="19" y2="12" />
-        </svg>
-      );
+      return <svg {...s}><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>;
     case "calendar":
-      return (
-        <svg {...s}>
-          <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-          <line x1="16" y1="2" x2="16" y2="6" />
-          <line x1="8" y1="2" x2="8" y2="6" />
-          <line x1="3" y1="10" x2="21" y2="10" />
-        </svg>
-      );
+      return <svg {...s}><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>;
     case "clock":
-      return (
-        <svg {...s}>
-          <circle cx="12" cy="12" r="10" />
-          <polyline points="12 6 12 12 16 14" />
-        </svg>
-      );
+      return <svg {...s}><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>;
     case "play":
-      return (
-        <svg {...s}>
-          <polygon points="5 3 19 12 5 21 5 3" />
-        </svg>
-      );
+      return <svg {...s}><polygon points="5 3 19 12 5 21 5 3" /></svg>;
     case "sparkles":
-      return (
-        <svg {...s}>
-          <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" />
-          <path d="M5 3v4" />
-          <path d="M19 17v4" />
-          <path d="M3 5h4" />
-          <path d="M17 19h4" />
-        </svg>
-      );
+      return <svg {...s}><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" /><path d="M5 3v4" /><path d="M19 17v4" /><path d="M3 5h4" /><path d="M17 19h4" /></svg>;
     case "alert":
-      return (
-        <svg {...s}>
-          <circle cx="12" cy="12" r="10" />
-          <line x1="12" y1="8" x2="12" y2="12" />
-          <line x1="12" y1="16" x2="12.01" y2="16" />
-        </svg>
-      );
+      return <svg {...s}><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>;
     case "menu":
-      return (
-        <svg {...s}>
-          <line x1="3" y1="12" x2="21" y2="12" />
-          <line x1="3" y1="6" x2="21" y2="6" />
-          <line x1="3" y1="18" x2="21" y2="18" />
-        </svg>
-      );
+      return <svg {...s}><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="18" x2="21" y2="18" /></svg>;
     case "chevron-right":
-      return (
-        <svg {...s}>
-          <polyline points="9 18 15 12 9 6" />
-        </svg>
-      );
+      return <svg {...s}><polyline points="9 18 15 12 9 6" /></svg>;
     case "image":
-      return (
-        <svg {...s}>
-          <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-          <circle cx="8.5" cy="8.5" r="1.5" />
-          <polyline points="21 15 16 10 5 21" />
-        </svg>
-      );
+      return <svg {...s}><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" /></svg>;
     case "log-out":
-      return (
-        <svg {...s}>
-          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-          <polyline points="16 17 21 12 16 7" />
-          <line x1="21" y1="12" x2="9" y2="12" />
-        </svg>
-      );
+      return <svg {...s}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>;
     case "youtube":
-      return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
-          <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
-        </svg>
-      );
+      return <svg width={size} height={size} viewBox="0 0 24 24" fill={color}><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" /></svg>;
     case "tiktok":
-      return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
-          <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-2.88 2.5 2.89 2.89 0 0 1-2.88-2.89 2.89 2.89 0 0 1 2.88-2.89c.3 0 .59.05.88.13V9.4a6.37 6.37 0 0 0-.88-.06A6.34 6.34 0 0 0 2.89 15.68a6.34 6.34 0 0 0 6.34 6.34 6.34 6.34 0 0 0 6.34-6.34V8.83a8.16 8.16 0 0 0 4.92 1.66V7.36a4.85 4.85 0 0 1-1-.07z" />
-        </svg>
-      );
+      return <svg width={size} height={size} viewBox="0 0 24 24" fill={color}><path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-2.88 2.5 2.89 2.89 0 0 1-2.88-2.89 2.89 2.89 0 0 1 2.88-2.89c.3 0 .59.05.88.13V9.4a6.37 6.37 0 0 0-.88-.06A6.34 6.34 0 0 0 2.89 15.68a6.34 6.34 0 0 0 6.34 6.34 6.34 6.34 0 0 0 6.34-6.34V8.83a8.16 8.16 0 0 0 4.92 1.66V7.36a4.85 4.85 0 0 1-1-.07z" /></svg>;
     case "facebook":
-      return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
-          <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z" />
-        </svg>
-      );
+      return <svg width={size} height={size} viewBox="0 0 24 24" fill={color}><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z" /></svg>;
     case "instagram":
-      return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
-          <rect x="2" y="2" width="20" height="20" rx="5" ry="5" />
-          <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" />
-          <line x1="17.5" y1="6.5" x2="17.51" y2="6.5" />
-        </svg>
-      );
+      return <svg width={size} height={size} viewBox="0 0 24 24" fill={color}><rect x="2" y="2" width="20" height="20" rx="5" ry="5" /><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" /><line x1="17.5" y1="6.5" x2="17.51" y2="6.5" /></svg>;
     case "film":
-      return (
-        <svg {...s}>
-          <rect x="2" y="2" width="20" height="20" rx="2.18" />
-          <line x1="7" y1="2" x2="7" y2="22" />
-          <line x1="17" y1="2" x2="17" y2="22" />
-          <line x1="2" y1="12" x2="22" y2="12" />
-          <line x1="2" y1="7" x2="7" y2="7" />
-          <line x1="2" y1="17" x2="7" y2="17" />
-          <line x1="17" y1="17" x2="22" y2="17" />
-          <line x1="17" y1="7" x2="22" y2="7" />
-        </svg>
-      );
+      return <svg {...s}><rect x="2" y="2" width="20" height="20" rx="2.18" /><line x1="7" y1="2" x2="7" y2="22" /><line x1="17" y1="2" x2="17" y2="22" /><line x1="2" y1="12" x2="22" y2="12" /><line x1="2" y1="7" x2="7" y2="7" /><line x1="2" y1="17" x2="7" y2="17" /><line x1="17" y1="17" x2="22" y2="17" /><line x1="17" y1="7" x2="22" y2="7" /></svg>;
     case "info":
-      return (
-        <svg {...s}>
-          <circle cx="12" cy="12" r="10" />
-          <line x1="12" y1="16" x2="12" y2="12" />
-          <line x1="12" y1="8" x2="12.01" y2="8" />
-        </svg>
-      );
+      return <svg {...s}><circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></svg>;
     case "external-link":
-      return (
-        <svg {...s}>
-          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-          <polyline points="15 3 21 3 21 9" />
-          <line x1="10" y1="14" x2="21" y2="3" />
-        </svg>
-      );
+      return <svg {...s}><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>;
     case "send":
-      return (
-        <svg {...s}>
-          <line x1="22" y1="2" x2="11" y2="13" />
-          <polygon points="22 2 15 22 11 13 2 9 22 2" />
-        </svg>
-      );
+      return <svg {...s}><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>;
+    case "wand":
+      return <svg {...s}><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" /></svg>;
+    case "monitor":
+      return <svg {...s}><rect x="2" y="3" width="20" height="14" rx="2" ry="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" /></svg>;
+    case "smartphone":
+      return <svg {...s}><rect x="5" y="2" width="14" height="20" rx="2" ry="2" /><line x1="12" y1="18" x2="12.01" y2="18" /></svg>;
+    case "zap":
+      return <svg {...s}><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>;
+    case "chevron-down":
+      return <svg {...s}><polyline points="6 9 12 15 18 9" /></svg>;
+    case "bell":
+      return <svg {...s}><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" /></svg>;
+    case "trending-up":
+      return <svg {...s}><polyline points="23 6 13.5 15.5 8.5 10.5 1 18" /><polyline points="17 6 23 6 23 12" /></svg>;
+    case "award":
+      return <svg {...s}><circle cx="12" cy="8" r="7" /><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88" /></svg>;
+    case "layers":
+      return <svg {...s}><polygon points="12 2 2 7 12 12 22 7 12 2" /><polyline points="2 17 12 22 22 17" /><polyline points="2 12 12 17 22 12" /></svg>;
+    case "dollar":
+      return <svg {...s}><line x1="12" y1="1" x2="12" y2="23" /><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>;
+    case "lock":
+      return <svg {...s}><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>;
+    case "star":
+      return <svg {...s}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>;
+    case "arrow-right":
+      return <svg {...s}><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></svg>;
+    case "gift":
+      return <svg {...s}><polyline points="20 12 20 22 4 22 4 12" /><rect x="2" y="7" width="20" height="5" /><line x1="12" y1="22" x2="12" y2="7" /><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z" /><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z" /></svg>;
     default:
-      return (
-        <svg {...s}>
-          <circle cx="12" cy="12" r="10" />
-        </svg>
-      );
+      return <svg {...s}><circle cx="12" cy="12" r="10" /></svg>;
   }
+}
+
+// ==================== CUSTOM 3D SELECT ====================
+function CustomSelect({
+  value,
+  onChange,
+  options,
+  label,
+  id,
+}: {
+  value: string;
+  onChange: (val: string) => void;
+  options: { value: string; label: string }[];
+  label?: string;
+  id?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [hovered, setHovered] = useState<string | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  const selectedLabel = options.find((o) => o.value === value)?.label || value;
+
+  return (
+    <div ref={ref} style={{ position: "relative", width: "100%" }}>
+      {label && (
+        <label
+          style={{
+            fontSize: 12,
+            color: "#6b6b7b",
+            fontWeight: 500,
+            display: "block",
+            marginBottom: 6,
+          }}
+        >
+          {label}
+        </label>
+      )}
+      <button
+        id={id}
+        type="button"
+        onClick={() => setOpen(!open)}
+        style={{
+          width: "100%",
+          background: "rgba(255,255,255,0.03)",
+          border: "1px solid rgba(255,255,255,0.08)",
+          color: "#f1f1f4",
+          borderRadius: 12,
+          padding: "10px 14px",
+          fontFamily: "inherit",
+          fontSize: 14,
+          outline: "none",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          transition: "all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)",
+          transform: open ? "scale(0.98) translateY(1px)" : "scale(1)",
+          boxShadow: open
+            ? "0 0 0 3px rgba(139,92,246,0.15), 0 8px 32px rgba(139,92,246,0.1)"
+            : "0 4px 12px rgba(0,0,0,0.1)",
+        }}
+      >
+        <span style={{ fontWeight: 500 }}>{selectedLabel}</span>
+        <span
+          style={{
+            transition: "transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)",
+            transform: open ? "rotate(180deg)" : "rotate(0deg)",
+            display: "inline-flex",
+          }}
+        >
+          <Icon name="chevron-down" size={16} color="#6b6b7b" />
+        </span>
+      </button>
+
+      <div
+        style={{
+          position: "absolute",
+          top: "calc(100% + 8px)",
+          left: 0,
+          right: 0,
+          zIndex: 50,
+          perspective: 800,
+          pointerEvents: open ? "auto" : "none",
+        }}
+      >
+        <div
+          style={{
+            background: "rgba(19, 19, 31, 0.95)",
+            backdropFilter: "blur(20px) saturate(180%)",
+            WebkitBackdropFilter: "blur(20px) saturate(180%)",
+            border: "1px solid rgba(139,92,246,0.15)",
+            borderRadius: 16,
+            padding: 8,
+            boxShadow: "0 20px 60px rgba(0,0,0,0.5), 0 0 40px rgba(139,92,246,0.08)",
+            transformOrigin: "top center",
+            transition: "all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)",
+            transform: open ? "rotateX(0deg) translateY(0) translateZ(0)" : "rotateX(-20deg) translateY(-12px) translateZ(-30px)",
+            opacity: open ? 1 : 0,
+          }}
+        >
+          {options.map((opt, i) => {
+            const isSelected = opt.value === value;
+            const isHovered = hovered === opt.value;
+            return (
+              <div
+                key={opt.value}
+                onClick={() => {
+                  onChange(opt.value);
+                  setOpen(false);
+                }}
+                onMouseEnter={() => setHovered(opt.value)}
+                onMouseLeave={() => setHovered(null)}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 10,
+                  cursor: "pointer",
+                  fontSize: 14,
+                  color: isSelected ? "#fff" : "#b4b4c7",
+                  background: isSelected
+                    ? "linear-gradient(135deg, rgba(139,92,246,0.35), rgba(236,72,153,0.25))"
+                    : isHovered
+                    ? "rgba(255,255,255,0.06)"
+                    : "transparent",
+                  border: isSelected ? "1px solid rgba(139,92,246,0.3)" : "1px solid transparent",
+                  marginBottom: 2,
+                  transition: "all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)",
+                  transform: open
+                    ? `translateY(0) translateZ(${isHovered ? 8 : 0}px) scale(${isHovered ? 1.02 : 1})`
+                    : `translateY(-8px) translateZ(-20px)`,
+                  opacity: open ? 1 : 0,
+                  transitionDelay: open ? `${i * 25}ms` : "0ms",
+                  fontWeight: isSelected ? 600 : 400,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                }}
+              >
+                <span>{opt.label}</span>
+                {isSelected && (
+                  <span
+                    style={{
+                      width: 18,
+                      height: 18,
+                      borderRadius: "50%",
+                      background: "linear-gradient(135deg, #8b5cf6, #ec4899)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      boxShadow: "0 0 12px rgba(139,92,246,0.5)",
+                    }}
+                  >
+                    <Icon name="check" size={10} color="#fff" />
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ==================== STYLES ====================
@@ -525,7 +659,7 @@ const S: Record<string, React.CSSProperties> = {
   uploadZone: { border: "2px dashed rgba(139,92,246,0.3)", borderRadius: 16, padding: "48px 24px", textAlign: "center", background: "rgba(139,92,246,0.03)", cursor: "pointer", transition: "all 0.2s", marginBottom: 32 },
   uploadZoneHover: { borderColor: "rgba(139,92,246,0.6)", background: "rgba(139,92,246,0.06)" },
   videoCard: { background: "#13131f", border: "1px solid #1e1e2d", borderRadius: 16, overflow: "hidden", display: "flex", flexDirection: "column" },
-  videoThumb: { height: 220, background: "#0a0a0f", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" },
+  videoThumb: { background: "#0a0a0f", display: "flex", alignItems: "center", justifyContent: "center", position: "relative", aspectRatio: "9/16", maxHeight: 420 },
   videoInfo: { padding: 20, display: "flex", flexDirection: "column", gap: 16, flex: 1 },
   badge: { padding: "4px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", whiteSpace: "nowrap" },
   accountCard: { display: "flex", alignItems: "center", gap: 16, padding: 20, background: "#13131f", border: "1px solid #1e1e2d", borderRadius: 16 },
@@ -558,6 +692,8 @@ const S: Record<string, React.CSSProperties> = {
   scrollX: { overflowX: "auto" },
   relative: { position: "relative" },
   absolute: { position: "absolute" },
+  ratio916: { aspectRatio: "9/16", maxHeight: 420, background: "#0a0a0f", borderRadius: 12, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" },
+  ratio169: { aspectRatio: "16/9", maxHeight: 280, background: "#0a0a0f", borderRadius: 12, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" },
 };
 
 const GLOBAL_CSS = `
@@ -592,7 +728,6 @@ const GLOBAL_CSS = `
   .btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .input:focus { border-color: rgba(139,92,246,0.5); box-shadow: 0 0 0 3px rgba(139,92,246,0.1); }
   .input::placeholder { color: #4a4a5a; }
-  select.input { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b6b7b' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; padding-right: 30px; }
   .fade-in { animation: fadeIn 0.3s ease; }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -603,6 +738,51 @@ const GLOBAL_CSS = `
   .status-dot.pending { background: #f59e0b; box-shadow: 0 0 8px rgba(245,158,11,0.5); }
   .status-dot.disconnected { background: #6b6b7b; }
   .platform-tab { transition: all 0.2s ease; cursor: pointer; position: relative; }
+  .video916 video { width: 100%; height: 100%; object-fit: cover; }
+  .video169 video { width: 100%; height: 100%; object-fit: cover; }
+  @keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-6px); }
+  }
+  .float-anim { animation: float 4s ease-in-out infinite; }
+  @keyframes glowPulse {
+    0%, 100% { box-shadow: 0 0 20px rgba(139,92,246,0.15); }
+    50% { box-shadow: 0 0 40px rgba(139,92,246,0.3); }
+  }
+  .glow-pulse { animation: glowPulse 3s ease-in-out infinite; }
+  @keyframes slideIn3D {
+    from { opacity: 0; transform: perspective(800px) rotateX(-8deg) translateY(-20px) translateZ(-40px); }
+    to { opacity: 1; transform: perspective(800px) rotateX(0) translateY(0) translateZ(0); }
+  }
+  .slide-3d { animation: slideIn3D 0.5s cubic-bezier(0.34, 1.56, 0.64, 1); }
+  @keyframes confettiFall {
+    0% { transform: translateY(-10vh) rotate(0deg); opacity: 1; }
+    100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
+  }
+  .confetti-piece {
+    position: fixed;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    top: -10px;
+    z-index: 100;
+    animation: confettiFall 3s ease-out forwards;
+  }
+  @keyframes toastIn {
+    from { transform: translateX(120%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+  .toast-in { animation: toastIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); }
+  @keyframes toastOut {
+    from { transform: translateX(0); opacity: 1; }
+    to { transform: translateX(120%); opacity: 0; }
+  }
+  .toast-out { animation: toastOut 0.3s ease forwards; }
+  @keyframes popIn {
+    0% { transform: scale(0.8); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  .pop-in { animation: popIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
 `;
 
 const VIEWS: { id: View; label: string; icon: string }[] = [
@@ -616,12 +796,21 @@ const VIEWS: { id: View; label: string; icon: string }[] = [
 
 const PLATFORM_META: Record<ContentPlatform, { color: string; icon: string }> = {
   "YouTube Shorts": { color: "#ff0000", icon: "youtube" },
+  "YouTube Video": { color: "#ff0000", icon: "youtube" },
   TikTok: { color: "#00f2ea", icon: "tiktok" },
   "Instagram Reels": { color: "#e1306c", icon: "instagram" },
   "Facebook Reels": { color: "#1877f2", icon: "facebook" },
 };
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+const TEMPLATES = [
+  { id: "fitness", name: "Fitness", icon: "zap", color: "#10b981" },
+  { id: "food", name: "Food", icon: "star", color: "#f59e0b" },
+  { id: "tech", name: "Tech", icon: "monitor", color: "#3b82f6" },
+  { id: "business", name: "Business", icon: "dollar", color: "#8b5cf6" },
+  { id: "travel", name: "Travel", icon: "external-link", color: "#ec4899" },
+];
 
 // ==================== APP ====================
 export default function App() {
@@ -630,7 +819,6 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
 
-  // Original state
   const [connectedAccounts, setConnectedAccounts] = useState<ConnectedAccount[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [newAccountId, setNewAccountId] = useState("");
@@ -641,15 +829,25 @@ export default function App() {
   const [processingVideoId, setProcessingVideoId] = useState("");
   const [message, setMessage] = useState("");
 
-  // Caption studio state
-  const [captionStudioVideoId, setCaptionStudioVideoId] = useState("");
-  const [captionStudioText, setCaptionStudioText] = useState("");
-  const [captionStudioPreview, setCaptionStudioPreview] = useState("");
-
-  // Settings state (local only — backend has no settings endpoint)
   const [autoSchedule, setAutoSchedule] = useState(false);
   const [notifyOnUpload, setNotifyOnUpload] = useState(true);
-  const [captionStyle, setCaptionStyle] = useState("modern");
+  const [captionStyle, setCaptionStyle] = useState<CaptionStyle>("modern");
+
+  const [captionStudioVideoId, setCaptionStudioVideoId] = useState("");
+  const [captionStudioText, setCaptionStudioText] = useState("");
+  const [captionStudioPosition, setCaptionStudioPosition] = useState<CaptionPosition>("top");
+  const [captionStudioStyle, setCaptionStudioStyle] = useState<CaptionStyle>("modern");
+  const [captionStudioPreview, setCaptionStudioPreview] = useState("");
+
+  const [regenCounter, setRegenCounter] = useState(0);
+
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [onboardingStep, setOnboardingStep] = useState(0);
+
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [showConfetti, setShowConfetti] = useState(false);
+
+  const [currentPlan, setCurrentPlan] = useState<Plan>("free");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -672,6 +870,11 @@ export default function App() {
     loadPosts();
     const interval = window.setInterval(() => loadPosts(), 10000);
     return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const done = localStorage.getItem("az_onboarding_complete");
+    if (!done) setShowOnboarding(true);
   }, []);
 
   const stats = useMemo(() => {
@@ -704,7 +907,22 @@ export default function App() {
 
   const selectedAccount = connectedAccounts.find((a) => a.accountId === selectedAccountId);
 
-  // ==================== API ====================
+  const freeLimit = 3;
+  const atLimit = currentPlan === "free" && plannedVideos.length >= freeLimit;
+
+  function addNotification(message: string, type: "success" | "error" | "info" = "info") {
+    const id = createId();
+    setNotifications((prev) => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setNotifications((prev) => prev.filter((n) => n.id !== id));
+    }, 4000);
+  }
+
+  function triggerConfetti() {
+    setShowConfetti(true);
+    setTimeout(() => setShowConfetti(false), 3000);
+  }
+
   async function loadAccounts() {
     try {
       setIsLoadingAccounts(true);
@@ -716,7 +934,7 @@ export default function App() {
         setSelectedAccountId(accounts[0].accountId);
       }
     } catch {
-      setMessage("Backend is not reachable. Make sure npm run server is running.");
+      addNotification("Connection lost. Reconnecting...", "error");
     } finally {
       setIsLoadingAccounts(false);
     }
@@ -728,7 +946,7 @@ export default function App() {
       const data = await response.json();
       setScheduledPosts(Array.isArray(data.posts) ? data.posts : []);
     } catch {
-      setMessage("Could not load scheduled posts.");
+      addNotification("Could not load publishing queue.", "error");
     }
   }
 
@@ -741,15 +959,28 @@ export default function App() {
     window.open(`${API_BASE_URL}/api/youtube/connect/${encodeURIComponent(accountId)}`, "_blank");
   }
 
+  async function smartGeneratePack(topic: string, platform: ContentPlatform, variation: number) {
+    const aiResult = await generateWithGemini(topic, platform);
+    if (aiResult) return aiResult;
+    return generatePack(topic, platform, variation);
+  }
+
   function handleVideoUpload(event: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files || []).filter((file) => file.type.startsWith("video/"));
     if (!files.length) return;
+
+    if (currentPlan === "free" && plannedVideos.length + files.length > freeLimit) {
+      addNotification("Free plan: 3 video limit reached. Upgrade to Pro for unlimited.", "error");
+      event.currentTarget.value = "";
+      return;
+    }
 
     const defaultPlatform = selectedPlatform;
 
     const newVideos = files.map((file, index) => {
       const topic = cleanFilename(file.name);
-      const pack = generatePack(topic, defaultPlatform);
+      const pack = generatePack(topic, defaultPlatform, regenCounter + index);
+
       return {
         id: createId(),
         file,
@@ -761,6 +992,8 @@ export default function App() {
         description: pack.description,
         tags: pack.tags,
         captionText: pack.captionText,
+        captionPosition: "top" as CaptionPosition,
+        captionStyle: "modern" as CaptionStyle,
         processedVideoUrl: "",
         processedFilename: "",
         scheduledAt: getNextWeekSchedule(plannedVideos.length + index),
@@ -770,13 +1003,18 @@ export default function App() {
     });
 
     setPlannedVideos((current) => [...current, ...newVideos]);
+    setRegenCounter((c) => c + files.length);
+    addNotification(`${files.length} video${files.length > 1 ? "s" : ""} uploaded successfully.`, "success");
     event.currentTarget.value = "";
   }
 
-  function regenerateAll() {
-    setPlannedVideos((current) =>
-      current.map((video, index) => {
-        const pack = generatePack(video.topic, video.contentPlatform);
+  async function regenerateAll() {
+    const nextCounter = regenCounter + plannedVideos.length;
+    setRegenCounter(nextCounter);
+
+    const updated = await Promise.all(
+      plannedVideos.map(async (video, index) => {
+        const pack = await smartGeneratePack(video.topic, video.contentPlatform, nextCounter + index);
         return {
           ...video,
           ...pack,
@@ -786,6 +1024,20 @@ export default function App() {
         };
       })
     );
+    setPlannedVideos(updated);
+    addNotification("All content packs regenerated with AI.", "success");
+  }
+
+  async function regenerateOne(video: PlannedVideo) {
+    const nextCounter = regenCounter + 1;
+    setRegenCounter(nextCounter);
+    const pack = await smartGeneratePack(video.topic, video.contentPlatform, nextCounter);
+    updateVideo(video.id, {
+      ...pack,
+      processedVideoUrl: "",
+      processedFilename: "",
+    });
+    addNotification("Content pack regenerated.", "success");
   }
 
   function updateVideo(id: string, updates: Partial<PlannedVideo>) {
@@ -796,6 +1048,7 @@ export default function App() {
     const video = plannedVideos.find((item) => item.id === id);
     if (video?.previewUrl) URL.revokeObjectURL(video.previewUrl);
     setPlannedVideos((current) => current.filter((item) => item.id !== id));
+    addNotification("Video removed.", "info");
   }
 
   async function processCaptionedVideo(video: PlannedVideo) {
@@ -805,11 +1058,13 @@ export default function App() {
     }
     try {
       setProcessingVideoId(video.id);
-      setMessage("Processing captioned video with FFmpeg...");
+      addNotification("Burning captions into your video...", "info");
 
       const formData = new FormData();
       formData.append("captionText", video.captionText.trim());
       formData.append("video", video.file);
+      formData.append("captionPosition", video.captionPosition || "top");
+      formData.append("captionStyle", video.captionStyle || "modern");
 
       const response = await fetch(`${API_BASE_URL}/api/media/process`, {
         method: "POST",
@@ -825,9 +1080,9 @@ export default function App() {
         processedVideoUrl: data.processed.fullUrl,
         processedFilename: data.processed.filename,
       });
-      setMessage("Captioned video is ready. YouTube will use the captioned version.");
+      addNotification("Captioned video is ready for publishing.", "success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Processing failed.");
+      addNotification(error instanceof Error ? error.message : "Processing failed.", "error");
     } finally {
       setProcessingVideoId("");
     }
@@ -841,13 +1096,14 @@ export default function App() {
   }
 
   async function scheduleOne(video: PlannedVideo) {
-    if (video.contentPlatform !== "YouTube Shorts") {
+    const isYouTube = video.contentPlatform === "YouTube Shorts" || video.contentPlatform === "YouTube Video";
+    if (!isYouTube) {
       throw new Error(
-        "Auto-posting currently supports YouTube Shorts only. Use TikTok/Instagram/Facebook packs for manual posting for now."
+        "YouTube publishing is live. TikTok, Instagram & Facebook coming soon."
       );
     }
     if (!selectedAccountId) {
-      throw new Error("Connect/select a YouTube account first.");
+      throw new Error("Connect your channel to start publishing.");
     }
 
     const uploadFile = await getUploadFile(video);
@@ -878,28 +1134,32 @@ export default function App() {
       return;
     }
     if (!selectedAccountId) {
-      alert("Connect/select a YouTube account first.");
+      alert("Connect your channel to start publishing.");
       return;
     }
-    const unsupportedVideos = plannedVideos.filter((video) => video.contentPlatform !== "YouTube Shorts");
+    const unsupportedVideos = plannedVideos.filter((video) => {
+      const isYouTube = video.contentPlatform === "YouTube Shorts" || video.contentPlatform === "YouTube Video";
+      return !isYouTube;
+    });
     if (unsupportedVideos.length) {
       alert(
-        "Schedule All only supports YouTube Shorts for now. Change TikTok/Instagram/Facebook drafts back to YouTube Shorts or post them manually."
+        "YouTube publishing is live. Switch TikTok/Instagram/Facebook drafts to YouTube to auto-post, or publish them manually."
       );
       return;
     }
     try {
       setIsScheduling(true);
-      setMessage("Scheduling videos to backend...");
+      addNotification("Scheduling your content...", "info");
       for (const video of plannedVideos) {
         await scheduleOne(video);
       }
       plannedVideos.forEach((video) => URL.revokeObjectURL(video.previewUrl));
       setPlannedVideos([]);
       await loadPosts();
-      setMessage("All videos scheduled. Backend will auto-post when time reaches.");
+      triggerConfetti();
+      addNotification("All videos scheduled! They will go live automatically.", "success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Scheduling failed.");
+      addNotification(error instanceof Error ? error.message : "Scheduling failed.", "error");
     } finally {
       setIsScheduling(false);
     }
@@ -907,21 +1167,21 @@ export default function App() {
 
   async function uploadNow(postId: string) {
     try {
-      setMessage("Uploading now...");
+      addNotification("Publishing now...", "info");
       const response = await fetch(`${API_BASE_URL}/api/posts/${postId}/upload-now`, { method: "POST" });
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.error || "Upload now failed");
       }
       await loadPosts();
-      setMessage("Upload finished.");
+      addNotification("Your video is now live!", "success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Upload now failed.");
+      addNotification(error instanceof Error ? error.message : "Upload failed.", "error");
     }
   }
 
   async function deletePost(postId: string) {
-    const confirmed = window.confirm("Delete this pending scheduled post?");
+    const confirmed = window.confirm("Delete this scheduled post?");
     if (!confirmed) return;
     try {
       const response = await fetch(`${API_BASE_URL}/api/posts/${postId}`, { method: "DELETE" });
@@ -930,9 +1190,9 @@ export default function App() {
         throw new Error(data.error || "Delete failed");
       }
       await loadPosts();
-      setMessage("Post deleted.");
+      addNotification("Post deleted.", "info");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Delete failed.");
+      addNotification(error instanceof Error ? error.message : "Delete failed.", "error");
     }
   }
 
@@ -978,14 +1238,140 @@ export default function App() {
 
   const renderMessage = () => {
     if (!message) return null;
-    const isError = message.toLowerCase().includes("failed") || message.toLowerCase().includes("error") || message.toLowerCase().includes("not reachable") || message.toLowerCase().includes("could not");
+    const isError =
+      message.toLowerCase().includes("failed") ||
+      message.toLowerCase().includes("error") ||
+      message.toLowerCase().includes("not reachable") ||
+      message.toLowerCase().includes("could not");
     return (
-      <div style={{ ...S.messageBanner, background: isError ? "rgba(239,68,68,0.1)" : "rgba(16,185,129,0.1)", borderColor: isError ? "rgba(239,68,68,0.2)" : "rgba(16,185,129,0.2)", color: isError ? "#ef4444" : "#10b981" }}>
+      <div
+        style={{
+          ...S.messageBanner,
+          background: isError ? "rgba(239,68,68,0.1)" : "rgba(16,185,129,0.1)",
+          borderColor: isError ? "rgba(239,68,68,0.2)" : "rgba(16,185,129,0.2)",
+          color: isError ? "#ef4444" : "#10b981",
+        }}
+      >
         <Icon name={isError ? "alert" : "check"} size={16} />
         <span style={{ flex: 1 }}>{message}</span>
         <button className="btn" style={{ background: "transparent", border: "none", color: "inherit", cursor: "pointer" }} onClick={() => setMessage("")} type="button">
           <Icon name="x" size={16} />
         </button>
+      </div>
+    );
+  };
+
+  // ==================== ONBOARDING ====================
+  const renderOnboarding = () => {
+    if (!showOnboarding) return null;
+    const steps = [
+      { title: "Welcome to " + APP_NAME, desc: "Upload once. We write the captions, titles, and hashtags. Then we post at the perfect time.", icon: "sparkles" },
+      { title: "Upload Your Content", desc: "Drop your videos here. We support 9:16 vertical for Shorts, Reels, and TikTok.", icon: "upload" },
+      { title: "Connect Your Channel", desc: "Link your YouTube channel. We will handle the rest.", icon: "users" },
+      { title: "Go Viral on Autopilot", desc: "Your content goes live automatically. Focus on creating, not posting.", icon: "zap" },
+    ];
+    const step = steps[onboardingStep];
+
+    return (
+      <div style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(10,10,15,0.95)", backdropFilter: "blur(20px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+        <div className="pop-in" style={{ maxWidth: 480, width: "100%", background: "#13131f", border: "1px solid #1e1e2d", borderRadius: 24, padding: 40, textAlign: "center" }}>
+          <div className="float-anim" style={{ width: 80, height: 80, borderRadius: 24, background: "linear-gradient(135deg, #8b5cf6, #ec4899)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 24px" }}>
+            <Icon name={step.icon} size={36} color="#fff" />
+          </div>
+          <h2 style={{ fontSize: 24, fontWeight: 700, marginBottom: 12 }}>{step.title}</h2>
+          <p style={{ fontSize: 15, color: "#6b6b7b", lineHeight: 1.6, marginBottom: 32 }}>{step.desc}</p>
+          <div style={{ display: "flex", gap: 12, justifyContent: "center" }}>
+            {onboardingStep > 0 && (
+              <button className="btn btn-secondary" style={S.btnSecondary} onClick={() => setOnboardingStep((s) => s - 1)} type="button">Back</button>
+            )}
+            {onboardingStep < steps.length - 1 ? (
+              <button className="btn btn-primary" style={S.btnPrimary} onClick={() => setOnboardingStep((s) => s + 1)} type="button">
+                Next <Icon name="arrow-right" size={14} />
+              </button>
+            ) : (
+              <button
+                className="btn btn-primary"
+                style={S.btnPrimary}
+                onClick={() => {
+                  setShowOnboarding(false);
+                  localStorage.setItem("az_onboarding_complete", "true");
+                }}
+                type="button"
+              >
+                Get Started <Icon name="arrow-right" size={14} />
+              </button>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 24 }}>
+            {steps.map((_, i) => (
+              <div key={i} style={{ width: 8, height: 8, borderRadius: "50%", background: i === onboardingStep ? "linear-gradient(135deg, #8b5cf6, #ec4899)" : "#2a2a3d", transition: "all 0.3s" }} />
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ==================== NOTIFICATIONS ====================
+  const renderNotifications = () => (
+    <div style={{ position: "fixed", top: 24, right: 24, zIndex: 90, display: "flex", flexDirection: "column", gap: 10, maxWidth: 360, pointerEvents: "none" }}>
+      {notifications.map((n) => (
+        <div
+          key={n.id}
+          className="toast-in"
+          style={{
+            background: "rgba(19,19,31,0.95)",
+            backdropFilter: "blur(12px)",
+            border: `1px solid ${n.type === "success" ? "rgba(16,185,129,0.2)" : n.type === "error" ? "rgba(239,68,68,0.2)" : "rgba(139,92,246,0.2)"}`,
+            borderRadius: 14,
+            padding: "14px 18px",
+            color: "#f1f1f4",
+            fontSize: 14,
+            fontWeight: 500,
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            boxShadow: "0 12px 40px rgba(0,0,0,0.4)",
+            pointerEvents: "auto",
+          }}
+        >
+          <span
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              background: n.type === "success" ? "#10b981" : n.type === "error" ? "#ef4444" : "#8b5cf6",
+              boxShadow: `0 0 10px ${n.type === "success" ? "rgba(16,185,129,0.5)" : n.type === "error" ? "rgba(239,68,68,0.5)" : "rgba(139,92,246,0.5)"}`,
+              flexShrink: 0,
+            }}
+          />
+          <span style={{ flex: 1 }}>{n.message}</span>
+        </div>
+      ))}
+    </div>
+  );
+
+  // ==================== CONFETTI ====================
+  const renderConfetti = () => {
+    if (!showConfetti) return null;
+    const colors = ["#8b5cf6", "#ec4899", "#10b981", "#3b82f6", "#f59e0b", "#ff0000"];
+    return (
+      <div style={{ position: "fixed", inset: 0, zIndex: 99, pointerEvents: "none", overflow: "hidden" }}>
+        {Array.from({ length: 40 }).map((_, i) => (
+          <div
+            key={i}
+            className="confetti-piece"
+            style={{
+              left: `${Math.random() * 100}%`,
+              background: colors[Math.floor(Math.random() * colors.length)],
+              animationDelay: `${Math.random() * 1.5}s`,
+              animationDuration: `${2 + Math.random() * 2}s`,
+              width: `${6 + Math.random() * 8}px`,
+              height: `${6 + Math.random() * 8}px`,
+              borderRadius: Math.random() > 0.5 ? "50%" : "2px",
+            }}
+          />
+        ))}
       </div>
     );
   };
@@ -1000,12 +1386,65 @@ export default function App() {
         <StatCard title="Failed" value={stats.failed} icon="alert" color="#ef4444" />
       </div>
 
+      <div className="grid4" style={{ ...S.grid4, marginBottom: 32 }}>
+        <div className="card-hover slide-3d" style={{ ...S.card, padding: 20 }}>
+          <div style={{ ...S.flexRow, gap: 12, marginBottom: 12 }}>
+            <div style={{ width: 40, height: 40, borderRadius: 10, background: "rgba(139,92,246,0.1)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Icon name="trending-up" size={20} color="#8b5cf6" />
+            </div>
+            <div>
+              <div style={{ fontSize: 13, color: "#6b6b7b" }}>Best Time to Post</div>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>3:00 PM EST</div>
+            </div>
+          </div>
+          <div style={{ fontSize: 12, color: "#4a4a5a" }}>Based on your audience activity</div>
+        </div>
+        <div className="card-hover slide-3d" style={{ ...S.card, padding: 20 }}>
+          <div style={{ ...S.flexRow, gap: 12, marginBottom: 12 }}>
+            <div style={{ width: 40, height: 40, borderRadius: 10, background: "rgba(16,185,129,0.1)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Icon name="award" size={20} color="#10b981" />
+            </div>
+            <div>
+              <div style={{ fontSize: 13, color: "#6b6b7b" }}>Top Performing</div>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>YouTube Shorts</div>
+            </div>
+          </div>
+          <div style={{ fontSize: 12, color: "#4a4a5a" }}>87% of your views this week</div>
+        </div>
+        <div className="card-hover slide-3d" style={{ ...S.card, padding: 20 }}>
+          <div style={{ ...S.flexRow, gap: 12, marginBottom: 12 }}>
+            <div style={{ width: 40, height: 40, borderRadius: 10, background: "rgba(245,158,11,0.1)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Icon name="layers" size={20} color="#f59e0b" />
+            </div>
+            <div>
+              <div style={{ fontSize: 13, color: "#6b6b7b" }}>Content Streak</div>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>5 Days</div>
+            </div>
+          </div>
+          <div style={{ fontSize: 12, color: "#4a4a5a" }}>Keep the momentum going</div>
+        </div>
+        <div className="card-hover slide-3d" style={{ ...S.card, padding: 20, border: "1px solid rgba(139,92,246,0.2)" }}>
+          <div style={{ ...S.flexRow, gap: 12, marginBottom: 12 }}>
+            <div style={{ width: 40, height: 40, borderRadius: 10, background: "linear-gradient(135deg, rgba(139,92,246,0.2), rgba(236,72,153,0.2))", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Icon name="star" size={20} color="#c4b5fd" />
+            </div>
+            <div>
+              <div style={{ fontSize: 13, color: "#c4b5fd" }}>Pro Feature</div>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>AI Content Suite</div>
+            </div>
+          </div>
+          <button className="btn" style={{ ...S.btnPrimary, width: "100%", justifyContent: "center", marginTop: 8, padding: "8px 12px", fontSize: 12 }} type="button">
+            Upgrade to Pro
+          </button>
+        </div>
+      </div>
+
       <SectionHeader title="Weekly Timeline" subtitle="Your content schedule at a glance" />
       <div className="grid7" style={S.grid7}>
         {DAYS.map((dayName) => {
           const dayItems = calendarGroups.filter((item) => getDayName(item.scheduledAt) === dayName);
           return (
-            <div key={dayName} className="card-hover" style={S.timelineDay}>
+            <div key={dayName} className="card-hover slide-3d" style={S.timelineDay}>
               <div style={{ marginBottom: 12, paddingBottom: 12, borderBottom: "1px solid #1e1e2d" }}>
                 <div style={{ fontWeight: 600, fontSize: 14 }}>{dayName}</div>
                 <div style={{ fontSize: 12, color: "#6b6b7b", marginTop: 2 }}>
@@ -1015,7 +1454,9 @@ export default function App() {
               <div>
                 {dayItems.slice(0, 4).map((item) => (
                   <div key={`${item.source}-${item.id}`} className="card-hover" style={S.timelineCard}>
-                    <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 6, lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title}</div>
+                    <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 6, lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {item.title}
+                    </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: "#6b6b7b" }}>
                       <span style={{ color: item.source === "Draft" ? "#8b5cf6" : "#10b981" }}>●</span>
                       {formatDateTime(item.scheduledAt)}
@@ -1039,7 +1480,7 @@ export default function App() {
           <SectionHeader title="Quick Actions" />
           <div style={{ ...S.flexWrap, gap: 12 }}>
             <button className="btn btn-primary" style={S.btnPrimary} onClick={regenerateAll} type="button">
-              <Icon name="sparkles" size={16} />
+              <Icon name="wand" size={16} />
               Regenerate All Packs
             </button>
             <button className="btn btn-success" style={S.btnSuccess} onClick={scheduleAll} disabled={isScheduling} type="button">
@@ -1054,8 +1495,59 @@ export default function App() {
 
   const renderVideos = () => (
     <div className="fade-in">
+      {currentPlan === "free" && (
+        <div className="slide-3d" style={{ ...S.card, marginBottom: 24, border: "1px solid rgba(245,158,11,0.2)", background: "rgba(245,158,11,0.03)" }}>
+          <div style={{ ...S.flexBetween }}>
+            <div style={{ ...S.flexRow, gap: 12 }}>
+              <Icon name="gift" size={20} color="#f59e0b" />
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>Free Plan</div>
+                <div style={{ fontSize: 12, color: "#6b6b7b" }}>
+                  {plannedVideos.length} of {freeLimit} videos used this week
+                </div>
+              </div>
+            </div>
+            <button className="btn btn-primary" style={{ ...S.btnPrimary, fontSize: 12 }} onClick={() => setCurrentPlan("pro")} type="button">
+              <Icon name="star" size={12} />
+              Upgrade to Pro
+            </button>
+          </div>
+          <div style={{ width: "100%", height: 4, background: "#1e1e2d", borderRadius: 2, marginTop: 12 }}>
+            <div style={{ width: `${Math.min((plannedVideos.length / freeLimit) * 100, 100)}%`, height: "100%", background: "linear-gradient(90deg, #8b5cf6, #ec4899)", borderRadius: 2, transition: "width 0.5s ease" }} />
+          </div>
+        </div>
+      )}
+
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ ...S.flexWrap, gap: 12 }}>
+          {TEMPLATES.map((t) => (
+            <button
+              key={t.id}
+              className="btn card-hover"
+              style={{
+                background: "rgba(255,255,255,0.03)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                borderRadius: 12,
+                padding: "12px 18px",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                color: "#f1f1f4",
+                fontSize: 13,
+                fontWeight: 600,
+              }}
+              onClick={() => addNotification(`${t.name} template applied. Upload videos to see the difference.`, "info")}
+              type="button"
+            >
+              <Icon name={t.icon} size={14} color={t.color} />
+              {t.name}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div
-        className="card-hover"
+        className="card-hover float-anim"
         style={{ ...S.uploadZone, ...(isDragging ? S.uploadZoneHover : {}) }}
         onDragOver={(e) => {
           e.preventDefault();
@@ -1073,15 +1565,16 @@ export default function App() {
         onClick={() => fileInputRef.current?.click()}
       >
         <input ref={fileInputRef} type="file" accept="video/*" multiple style={{ display: "none" }} onChange={handleVideoUpload} />
-        <div style={{ width: 64, height: 64, borderRadius: 20, background: "rgba(139,92,246,0.1)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
+        <div className="glow-pulse" style={{ width: 64, height: 64, borderRadius: 20, background: "rgba(139,92,246,0.1)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
           <Icon name="upload" size={28} color="#8b5cf6" />
         </div>
         <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>Upload Week Videos</h3>
         <p style={{ fontSize: 14, color: "#6b6b7b", maxWidth: 400, margin: "0 auto" }}>
-          Drag and drop video files here, or click to browse. Supports MP4, MOV, WEBM.
+          Drag and drop video files here, or click to browse. 9:16 vertical recommended for Shorts/Reels/TikTok.
         </p>
         <div style={{ marginTop: 16, display: "flex", gap: 8, justifyContent: "center" }}>
           <span style={{ ...S.badge, background: "rgba(139,92,246,0.15)", color: "#c4b5fd" }}>{selectedPlatform}</span>
+          <span style={{ ...S.badge, background: "rgba(16,185,129,0.15)", color: "#10b981" }}>9:16</span>
         </div>
       </div>
 
@@ -1092,7 +1585,7 @@ export default function App() {
           plannedVideos.length > 0 && (
             <div style={{ ...S.flexWrap, gap: 8 }}>
               <button className="btn btn-secondary" style={S.btnSecondary} onClick={regenerateAll} type="button">
-                <Icon name="sparkles" size={14} />
+                <Icon name="wand" size={14} />
                 Regenerate All
               </button>
               <button className="btn btn-success" style={S.btnSuccess} onClick={scheduleAll} disabled={isScheduling} type="button">
@@ -1107,47 +1600,54 @@ export default function App() {
       {plannedVideos.length === 0 ? (
         <div className="card-hover" style={{ ...S.card, ...S.emptyState }}>
           <Icon name="film" size={48} color="#2a2a3d" />
-          <p style={{ marginTop: 16 }}>No draft videos yet</p>
-          <p style={{ fontSize: 13, color: "#6b6b7b", marginTop: 4 }}>Upload your week videos. The app will generate packs automatically.</p>
+          <p style={{ marginTop: 16 }}>Your queue is empty</p>
+          <p style={{ fontSize: 13, color: "#6b6b7b", marginTop: 4 }}>Upload your first week of videos to get started.</p>
+          <button className="btn btn-primary" style={{ ...S.btnPrimary, marginTop: 20 }} onClick={() => fileInputRef.current?.click()} type="button">
+            <Icon name="upload" size={16} />
+            Upload Your First Video
+          </button>
         </div>
       ) : (
         <div className="grid2" style={S.grid2}>
-          {plannedVideos.map((video, index) => (
-            <div key={video.id} className="card-hover" style={S.videoCard}>
-              <div style={S.videoThumb}>
-                <video
-                  src={video.processedVideoUrl || video.previewUrl}
-                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                  controls
-                />
-                <div style={{ position: "absolute", top: 12, right: 12 }}>
-                  <span style={{ ...S.badge, background: video.processedVideoUrl ? "rgba(16,185,129,0.2)" : "rgba(245,158,11,0.2)", color: video.processedVideoUrl ? "#10b981" : "#f59e0b" }}>
-                    {video.processedVideoUrl ? "Captioned" : "Draft"}
-                  </span>
+          {plannedVideos.map((video, index) => {
+            const isShorts = video.contentPlatform.includes("Shorts") || video.contentPlatform.includes("Reels") || video.contentPlatform === "TikTok";
+            return (
+              <div key={video.id} className="card-hover slide-3d" style={S.videoCard}>
+                <div style={S.videoThumb}>
+                  <video
+                    src={video.processedVideoUrl || video.previewUrl}
+                    className={isShorts ? "video916" : "video169"}
+                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                    controls
+                  />
+                  <div style={{ position: "absolute", top: 12, right: 12, display: "flex", gap: 8, flexDirection: "column" }}>
+                    <span style={{ ...S.badge, background: "rgba(0,0,0,0.6)", color: "#fff", backdropFilter: "blur(4px)" }}>
+                      {isShorts ? "9:16" : "16:9"}
+                    </span>
+                    <span style={{ ...S.badge, background: video.processedVideoUrl ? "rgba(16,185,129,0.2)" : "rgba(245,158,11,0.2)", color: video.processedVideoUrl ? "#10b981" : "#f59e0b" }}>
+                      {video.processedVideoUrl ? "Captioned" : "Draft"}
+                    </span>
+                  </div>
+                  <div style={{ position: "absolute", bottom: 12, left: 12 }}>
+                    <span style={{ ...S.badge, background: "rgba(0,0,0,0.6)", color: "#fff", backdropFilter: "blur(4px)" }}>
+                      {formatFileSize(video.file.size)}
+                    </span>
+                  </div>
                 </div>
-                <div style={{ position: "absolute", bottom: 12, left: 12, display: "flex", gap: 8 }}>
-                  <span style={{ ...S.badge, background: "rgba(0,0,0,0.6)", color: "#fff", backdropFilter: "blur(4px)" }}>
-                    {formatFileSize(video.file.size)}
-                  </span>
-                </div>
-              </div>
 
-              <div style={S.videoInfo}>
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4, wordBreak: "break-all" }}>{video.filename}</div>
-                  <div style={{ fontSize: 12, color: "#6b6b7b" }}>Draft #{index + 1}</div>
-                </div>
+                <div style={S.videoInfo}>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4, wordBreak: "break-all" }}>{video.filename}</div>
+                    <div style={{ fontSize: 12, color: "#6b6b7b" }}>Video {index + 1} of {plannedVideos.length}</div>
+                  </div>
 
-                <div style={{ ...S.flexCol, gap: 12 }}>
-                  <label style={S.label}>
-                    Content Platform
-                    <select
-                      className="input"
-                      style={S.input}
+                  <div style={{ ...S.flexCol, gap: 12 }}>
+                    <CustomSelect
+                      label="Content Platform"
                       value={video.contentPlatform}
-                      onChange={(e) => {
-                        const contentPlatform = e.target.value as ContentPlatform;
-                        const pack = generatePack(video.topic, contentPlatform);
+                      onChange={(val) => {
+                        const contentPlatform = val as ContentPlatform;
+                        const pack = generatePack(video.topic, contentPlatform, regenCounter);
                         updateVideo(video.id, {
                           contentPlatform,
                           ...pack,
@@ -1155,130 +1655,162 @@ export default function App() {
                           processedFilename: "",
                         });
                       }}
-                    >
-                      {contentPlatforms.map((p) => (
-                        <option key={p} value={p}>
-                          {p}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label style={S.label}>
-                    Topic
-                    <input
-                      className="input"
-                      style={S.input}
-                      value={video.topic}
-                      onChange={(e) => {
-                        const topic = e.target.value;
-                        const pack = generatePack(topic, video.contentPlatform);
-                        updateVideo(video.id, { topic, ...pack, processedVideoUrl: "", processedFilename: "" });
-                      }}
+                      options={contentPlatforms.map((p) => ({ value: p, label: p }))}
                     />
-                  </label>
 
-                  <label style={S.label}>
-                    Schedule Time
-                    <input
-                      className="input"
-                      style={S.input}
-                      type="datetime-local"
-                      value={video.scheduledAt}
-                      onChange={(e) => updateVideo(video.id, { scheduledAt: e.target.value })}
-                    />
-                  </label>
+                    <label style={S.label}>
+                      Topic
+                      <input
+                        className="input"
+                        style={S.input}
+                        value={video.topic}
+                        onChange={(e) => {
+                          const topic = e.target.value;
+                          const pack = generatePack(topic, video.contentPlatform, regenCounter);
+                          updateVideo(video.id, { topic, ...pack, processedVideoUrl: "", processedFilename: "" });
+                        }}
+                      />
+                    </label>
 
-                  <label style={S.label}>
-                    Privacy
-                    <select
-                      className="input"
-                      style={S.input}
+                    <label style={S.label}>
+                      Schedule Time
+                      <input
+                        className="input"
+                        style={S.input}
+                        type="datetime-local"
+                        value={video.scheduledAt}
+                        onChange={(e) => updateVideo(video.id, { scheduledAt: e.target.value })}
+                      />
+                    </label>
+
+                    <CustomSelect
+                      label="Privacy"
                       value={video.privacyStatus}
-                      onChange={(e) => updateVideo(video.id, { privacyStatus: e.target.value as "private" | "unlisted" | "public" })}
-                    >
-                      <option value="public">Public</option>
-                      <option value="unlisted">Unlisted</option>
-                      <option value="private">Private</option>
-                    </select>
-                  </label>
+                      onChange={(val) => updateVideo(video.id, { privacyStatus: val as "private" | "unlisted" | "public" })}
+                      options={[
+                        { value: "public", label: "Public" },
+                        { value: "unlisted", label: "Unlisted" },
+                        { value: "private", label: "Private" },
+                      ]}
+                    />
 
-                  <div style={S.divider} />
+                    <div style={S.divider} />
 
-                  <div style={{ ...S.flexBetween, alignItems: "center" }}>
-                    <label style={S.label} htmlFor={`title-${video.id}`}>Title</label>
-                    <button className="btn btn-secondary" style={{ ...S.btnSecondary, padding: "4px 8px", fontSize: 11 }} onClick={() => copyToClipboard(video.title)} type="button">
-                      <Icon name="copy" size={12} /> Copy
-                    </button>
-                  </div>
-                  <input id={`title-${video.id}`} className="input" style={S.input} value={video.title} onChange={(e) => updateVideo(video.id, { title: e.target.value })} />
+                    <div style={{ ...S.flexBetween, alignItems: "center" }}>
+                      <label style={S.label} htmlFor={`title-${video.id}`}>Title</label>
+                      <button className="btn btn-secondary" style={{ ...S.btnSecondary, padding: "4px 8px", fontSize: 11 }} onClick={() => copyToClipboard(video.title)} type="button">
+                        <Icon name="copy" size={12} /> Copy
+                      </button>
+                    </div>
+                    <input id={`title-${video.id}`} className="input" style={S.input} value={video.title} onChange={(e) => updateVideo(video.id, { title: e.target.value })} />
 
-                  <div style={{ ...S.flexBetween, alignItems: "center" }}>
-                    <label style={S.label} htmlFor={`desc-${video.id}`}>Description</label>
-                    <button className="btn btn-secondary" style={{ ...S.btnSecondary, padding: "4px 8px", fontSize: 11 }} onClick={() => copyToClipboard(video.description)} type="button">
-                      <Icon name="copy" size={12} /> Copy
-                    </button>
-                  </div>
-                  <textarea id={`desc-${video.id}`} className="input" style={{ ...S.textarea, minHeight: 80 }} value={video.description} onChange={(e) => updateVideo(video.id, { description: e.target.value })} />
+                    <div style={{ ...S.flexBetween, alignItems: "center" }}>
+                      <label style={S.label} htmlFor={`desc-${video.id}`}>Description</label>
+                      <button className="btn btn-secondary" style={{ ...S.btnSecondary, padding: "4px 8px", fontSize: 11 }} onClick={() => copyToClipboard(video.description)} type="button">
+                        <Icon name="copy" size={12} /> Copy
+                      </button>
+                    </div>
+                    <textarea id={`desc-${video.id}`} className="input" style={{ ...S.textarea, minHeight: 80 }} value={video.description} onChange={(e) => updateVideo(video.id, { description: e.target.value })} />
 
-                  <div style={{ ...S.flexBetween, alignItems: "center" }}>
-                    <label style={S.label} htmlFor={`tags-${video.id}`}>Hashtags</label>
-                    <button className="btn btn-secondary" style={{ ...S.btnSecondary, padding: "4px 8px", fontSize: 11 }} onClick={() => copyToClipboard(video.tags)} type="button">
-                      <Icon name="copy" size={12} /> Copy
-                    </button>
-                  </div>
-                  <input id={`tags-${video.id}`} className="input" style={S.input} value={video.tags} onChange={(e) => updateVideo(video.id, { tags: e.target.value })} />
+                    <div style={{ ...S.flexBetween, alignItems: "center" }}>
+                      <label style={S.label} htmlFor={`tags-${video.id}`}>Hashtags</label>
+                      <button className="btn btn-secondary" style={{ ...S.btnSecondary, padding: "4px 8px", fontSize: 11 }} onClick={() => copyToClipboard(video.tags)} type="button">
+                        <Icon name="copy" size={12} /> Copy
+                      </button>
+                    </div>
+                    <input id={`tags-${video.id}`} className="input" style={S.input} value={video.tags} onChange={(e) => updateVideo(video.id, { tags: e.target.value })} />
 
-                  <label style={S.label} htmlFor={`cap-${video.id}`}>Text To Burn On Video</label>
-                  <input
-                    id={`cap-${video.id}`}
-                    className="input"
-                    style={S.input}
-                    value={video.captionText}
-                    onChange={(e) => updateVideo(video.id, { captionText: e.target.value, processedVideoUrl: "", processedFilename: "" })}
-                    placeholder="Example: Some feelings are quiet but heavy"
-                  />
+                    <label style={S.label} htmlFor={`cap-${video.id}`}>Text To Burn On Video</label>
+                    <input
+                      id={`cap-${video.id}`}
+                      className="input"
+                      style={S.input}
+                      value={video.captionText}
+                      onChange={(e) => updateVideo(video.id, { captionText: e.target.value, processedVideoUrl: "", processedFilename: "" })}
+                      placeholder="Example: Some feelings are quiet but heavy"
+                    />
 
-                  {video.processedVideoUrl && (
-                    <p style={{ color: "#b9ffdc", margin: 0, fontSize: 13, lineHeight: 1.6 }}>
-                      Captioned video ready. YouTube upload will use the processed video.
-                    </p>
-                  )}
+                    <div style={{ ...S.flexWrap, gap: 8 }}>
+                      <CustomSelect
+                        label="Position"
+                        value={video.captionPosition}
+                        onChange={(val) => updateVideo(video.id, { captionPosition: val as CaptionPosition })}
+                        options={[
+                          { value: "top", label: "Top" },
+                          { value: "center", label: "Center" },
+                          { value: "bottom", label: "Bottom" },
+                        ]}
+                      />
+                      <CustomSelect
+                        label="Style"
+                        value={video.captionStyle}
+                        onChange={(val) => updateVideo(video.id, { captionStyle: val as CaptionStyle })}
+                        options={[
+                          { value: "modern", label: "Modern" },
+                          { value: "bold", label: "Bold" },
+                          { value: "minimal", label: "Minimal" },
+                          { value: "classic", label: "Classic" },
+                          { value: "cinematic", label: "Cinematic" },
+                        ]}
+                      />
+                    </div>
 
-                  {video.contentPlatform !== "YouTube Shorts" && (
-                    <p style={{ color: "#ffcf8a", margin: 0, fontSize: 13, lineHeight: 1.6 }}>
-                      {video.contentPlatform} pack is for manual posting for now. Real auto-post currently supports YouTube Shorts only.
-                    </p>
-                  )}
-
-                  <div style={{ ...S.flexWrap, gap: 8, marginTop: 4 }}>
-                    <button className="btn btn-secondary" style={S.btnSecondary} onClick={() => { const pack = generatePack(video.topic, video.contentPlatform); updateVideo(video.id, { ...pack, processedVideoUrl: "", processedFilename: "" }); }} type="button">
-                      <Icon name="refresh" size={14} />
-                      Regenerate
-                    </button>
-                    <button className="btn btn-primary" style={S.btnPrimary} onClick={() => processCaptionedVideo(video)} disabled={processingVideoId === video.id} type="button">
-                      <Icon name="sparkles" size={14} />
-                      {processingVideoId === video.id ? "Processing..." : "Process Captioned Video"}
-                    </button>
                     {video.processedVideoUrl && (
-                      <a href={video.processedVideoUrl} target="_blank" rel="noreferrer" style={{ ...S.btnSecondary, textDecoration: "none" }}>
-                        <Icon name="external-link" size={14} />
-                        Open Processed
-                      </a>
+                      <p style={{ color: "#b9ffdc", margin: 0, fontSize: 13, lineHeight: 1.6 }}>
+                        Captioned video ready. YouTube upload will use the processed video.
+                      </p>
                     )}
-                    <button className="btn btn-success" style={S.btnSuccess} onClick={async () => { try { setMessage("Scheduling video..."); await scheduleOne(video); removeDraft(video.id); await loadPosts(); setMessage("Video scheduled."); } catch (error) { setMessage(error instanceof Error ? error.message : "Schedule failed."); } }} type="button">
-                      <Icon name="calendar" size={14} />
-                      Schedule
-                    </button>
-                    <button className="btn btn-danger" style={S.btnDanger} onClick={() => removeDraft(video.id)} type="button">
-                      <Icon name="trash" size={14} />
-                      Remove
-                    </button>
+
+                    {video.contentPlatform !== "YouTube Shorts" && video.contentPlatform !== "YouTube Video" && (
+                      <p style={{ color: "#ffcf8a", margin: 0, fontSize: 13, lineHeight: 1.6 }}>
+                        {video.contentPlatform} pack is for manual posting for now. Real auto-post currently supports YouTube only.
+                      </p>
+                    )}
+
+                    <div style={{ ...S.flexWrap, gap: 8, marginTop: 4 }}>
+                      <button className="btn btn-secondary" style={S.btnSecondary} onClick={() => regenerateOne(video)} type="button">
+                        <Icon name="refresh" size={14} />
+                        Regenerate
+                      </button>
+                      <button className="btn btn-primary" style={S.btnPrimary} onClick={() => processCaptionedVideo(video)} disabled={processingVideoId === video.id} type="button">
+                        <Icon name="sparkles" size={14} />
+                        {processingVideoId === video.id ? "Processing..." : "Burn Captions"}
+                      </button>
+                      {video.processedVideoUrl && (
+                        <a href={video.processedVideoUrl} target="_blank" rel="noreferrer" style={{ ...S.btnSecondary, textDecoration: "none" }}>
+                          <Icon name="external-link" size={14} />
+                          Open Processed
+                        </a>
+                      )}
+                      <button
+                        className="btn btn-success"
+                        style={S.btnSuccess}
+                        onClick={async () => {
+                          try {
+                            addNotification("Scheduling your video...", "info");
+                            await scheduleOne(video);
+                            removeDraft(video.id);
+                            await loadPosts();
+                            addNotification("Video scheduled. It will go live automatically.", "success");
+                          } catch (error) {
+                            addNotification(error instanceof Error ? error.message : "Schedule failed.", "error");
+                          }
+                        }}
+                        type="button"
+                      >
+                        <Icon name="calendar" size={14} />
+                        Schedule
+                      </button>
+                      <button className="btn btn-danger" style={S.btnDanger} onClick={() => removeDraft(video.id)} type="button">
+                        <Icon name="trash" size={14} />
+                        Remove
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
@@ -1286,14 +1818,14 @@ export default function App() {
 
   const renderAccounts = () => (
     <div className="fade-in">
-      <div style={{ ...S.card, marginBottom: 24 }}>
+      <div className="slide-3d" style={{ ...S.card, marginBottom: 24 }}>
         <div style={{ ...S.flexBetween, marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
           <div>
             <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>Connected Accounts</h2>
             <p style={{ fontSize: 13, color: "#6b6b7b" }}>
-              {selectedPlatform === "YouTube Shorts"
+              {selectedPlatform === "YouTube Shorts" || selectedPlatform === "YouTube Video"
                 ? "Manage your YouTube channel connections."
-                : `Auto-post currently supports YouTube Shorts only. ${selectedPlatform} connections are for future use.`}
+                : `YouTube publishing is live. ${selectedPlatform} coming soon.`}
             </p>
           </div>
           <div style={{ ...S.flexWrap, gap: 8 }}>
@@ -1304,7 +1836,7 @@ export default function App() {
           </div>
         </div>
 
-        {selectedPlatform === "YouTube Shorts" ? (
+        {selectedPlatform === "YouTube Shorts" || selectedPlatform === "YouTube Video" ? (
           <>
             <div style={{ ...S.flexWrap, gap: 12, marginBottom: 20, alignItems: "flex-end" }}>
               <div style={{ flex: 1, minWidth: 200 }}>
@@ -1320,9 +1852,10 @@ export default function App() {
             {connectedAccounts.length === 0 ? (
               <div style={{ ...S.emptyState, padding: 40 }}>
                 <Icon name="users" size={48} color="#2a2a3d" />
-                <p style={{ marginTop: 16 }}>No accounts connected for this platform</p>
+                <p style={{ marginTop: 16 }}>No accounts connected</p>
+                <p style={{ fontSize: 13, color: "#6b6b7b", marginTop: 4 }}>Connect your YouTube channel to start publishing.</p>
                 <button className="btn btn-primary" style={{ ...S.btnPrimary, marginTop: 16 }} onClick={connectYouTube} type="button">
-                  Connect Your First Account
+                  Connect Your First Channel
                 </button>
               </div>
             ) : (
@@ -1347,7 +1880,7 @@ export default function App() {
                     <button
                       className="btn btn-danger"
                       style={{ ...S.btnDanger, padding: 8 }}
-                      onClick={() => setMessage("Account removal is not supported by the current backend.")}
+                      onClick={() => addNotification("Account removal is not supported yet.", "error")}
                       type="button"
                       title="Delete Account"
                     >
@@ -1359,15 +1892,15 @@ export default function App() {
             )}
 
             <div style={{ marginTop: 20 }}>
-              <label style={S.label}>Select Channel for Uploading</label>
-              <select className="input" style={S.input} value={selectedAccountId} onChange={(e) => setSelectedAccountId(e.target.value)}>
-                {!connectedAccounts.length && <option value="">No channel connected</option>}
-                {connectedAccounts.map((account) => (
-                  <option key={account.accountId} value={account.accountId}>
-                    {account.channelTitle || account.accountId}
-                  </option>
-                ))}
-              </select>
+              <CustomSelect
+                label="Select Channel for Uploading"
+                value={selectedAccountId}
+                onChange={(val) => setSelectedAccountId(val)}
+                options={[
+                  ...(connectedAccounts.length === 0 ? [{ value: "", label: "No channel connected" }] : []),
+                  ...connectedAccounts.map((a) => ({ value: a.accountId, label: a.channelTitle || a.accountId })),
+                ]}
+              />
               <div style={{ marginTop: 12, padding: 12, background: "#0a0a0f", borderRadius: 10, border: "1px solid #1e1e2d" }}>
                 {isLoadingAccounts ? (
                   <span style={{ fontSize: 13, color: "#6b6b7b" }}>Checking connection...</span>
@@ -1375,7 +1908,7 @@ export default function App() {
                   <div style={{ ...S.flexRow, gap: 12 }}>
                     <span className="status-dot connected" />
                     <span style={{ fontSize: 13, fontWeight: 500 }}>
-                      {selectedAccount.channelTitle || selectedAccount.accountId} — Ready to upload
+                      {selectedAccount.channelTitle || selectedAccount.accountId} — Ready to publish
                     </span>
                   </div>
                 ) : (
@@ -1390,9 +1923,9 @@ export default function App() {
         ) : (
           <div style={{ ...S.emptyState, padding: 40 }}>
             <Icon name="info" size={48} color="#2a2a3d" />
-            <p style={{ marginTop: 16 }}>{selectedPlatform} auto-posting is coming soon</p>
+            <p style={{ marginTop: 16 }}>{selectedPlatform} publishing is coming soon</p>
             <p style={{ fontSize: 13, color: "#6b6b7b", marginTop: 4 }}>
-              Switch to YouTube Shorts to connect an account.
+              Switch to YouTube Shorts or YouTube Video to connect a channel.
             </p>
           </div>
         )}
@@ -1404,7 +1937,7 @@ export default function App() {
     <div className="fade-in">
       <SectionHeader
         title="Publishing Queue"
-        subtitle="Backend schedule status."
+        subtitle="Your upcoming content schedule."
         action={
           <button className="btn btn-secondary" style={S.btnSecondary} onClick={loadPosts} type="button">
             <Icon name="refresh" size={14} />
@@ -1416,14 +1949,19 @@ export default function App() {
       {scheduledPosts.length === 0 ? (
         <div className="card-hover" style={{ ...S.card, ...S.emptyState }}>
           <Icon name="list" size={48} color="#2a2a3d" />
-          <p style={{ marginTop: 16 }}>No scheduled backend posts yet.</p>
+          <p style={{ marginTop: 16 }}>Your queue is empty</p>
+          <p style={{ fontSize: 13, color: "#6b6b7b", marginTop: 4 }}>Upload your first week of videos to get started.</p>
+          <button className="btn btn-primary" style={{ ...S.btnPrimary, marginTop: 20 }} onClick={() => { setActiveView("videos"); }} type="button">
+            <Icon name="upload" size={16} />
+            Upload Videos
+          </button>
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {scheduledPosts.map((post) => (
             <div
               key={post.id}
-              className="card-hover"
+              className="card-hover slide-3d"
               style={{
                 ...S.queueItem,
                 borderLeftColor:
@@ -1437,7 +1975,7 @@ export default function App() {
                 <div style={{ ...S.flexWrap, gap: 12, fontSize: 12, color: "#6b6b7b" }}>
                   <span style={{ ...S.flexRow, gap: 4 }}>
                     <Icon name="youtube" size={12} color="#ff0000" />
-                    YouTube Shorts
+                    YouTube
                   </span>
                   <span style={{ ...S.flexRow, gap: 4 }}>
                     <Icon name="users" size={12} />
@@ -1467,7 +2005,7 @@ export default function App() {
                 {post.status !== "Posted" && (
                   <button className="btn btn-success" style={S.btnSuccess} onClick={() => uploadNow(post.id)} type="button">
                     <Icon name="upload" size={14} />
-                    Upload Now
+                    Publish Now
                   </button>
                 )}
                 {post.status !== "Posted" && (
@@ -1489,20 +2027,22 @@ export default function App() {
 
     async function handleProcessStudio() {
       if (!selectedVideo) {
-        setMessage("Select a video first.");
+        addNotification("Select a video first.", "error");
         return;
       }
       if (!captionStudioText.trim()) {
-        setMessage("Enter caption text first.");
+        addNotification("Enter caption text first.", "error");
         return;
       }
       try {
         setProcessingVideoId(selectedVideo.id);
-        setMessage("Processing captioned video with FFmpeg...");
+        addNotification("Burning captions into your video...", "info");
 
         const formData = new FormData();
         formData.append("captionText", captionStudioText.trim());
         formData.append("video", selectedVideo.file);
+        formData.append("captionPosition", captionStudioPosition);
+        formData.append("captionStyle", captionStudioStyle);
 
         const response = await fetch(`${API_BASE_URL}/api/media/process`, {
           method: "POST",
@@ -1519,9 +2059,9 @@ export default function App() {
           processedFilename: data.processed.filename,
         });
         setCaptionStudioPreview(data.processed.fullUrl);
-        setMessage("Captioned video is ready.");
+        addNotification("Captioned video is ready for publishing.", "success");
       } catch (error) {
-        setMessage(error instanceof Error ? error.message : "Processing failed.");
+        addNotification(error instanceof Error ? error.message : "Processing failed.", "error");
       } finally {
         setProcessingVideoId("");
       }
@@ -1530,24 +2070,49 @@ export default function App() {
     return (
       <div className="fade-in">
         <div className="grid2" style={{ ...S.grid2, alignItems: "start" }}>
-          <div style={S.card}>
+          <div className="slide-3d" style={S.card}>
             <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 20 }}>Caption Studio</h2>
 
             <div style={{ marginBottom: 16 }}>
-              <label style={S.label}>Select Video</label>
-              <select className="input" style={S.input} value={captionStudioVideoId} onChange={(e) => setCaptionStudioVideoId(e.target.value)}>
-                <option value="">Choose a video...</option>
-                {plannedVideos.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.filename}
-                  </option>
-                ))}
-              </select>
+              <CustomSelect
+                label="Select Video"
+                value={captionStudioVideoId}
+                onChange={(val) => setCaptionStudioVideoId(val)}
+                options={[
+                  { value: "", label: "Choose a video..." },
+                  ...plannedVideos.map((v) => ({ value: v.id, label: v.filename })),
+                ]}
+              />
             </div>
 
             <div style={{ marginBottom: 16 }}>
               <label style={S.label}>Caption Text</label>
-              <textarea className="input" style={{ ...S.textarea, minHeight: 160 }} value={captionStudioText} onChange={(e) => setCaptionStudioText(e.target.value)} placeholder="Enter caption text to burn into the video..." />
+              <textarea className="input" style={{ ...S.textarea, minHeight: 100 }} value={captionStudioText} onChange={(e) => setCaptionStudioText(e.target.value)} placeholder="Enter caption text to burn onto the video..." />
+            </div>
+
+            <div style={{ ...S.flexWrap, gap: 12, marginBottom: 16 }}>
+              <CustomSelect
+                label="Position"
+                value={captionStudioPosition}
+                onChange={(val) => setCaptionStudioPosition(val as CaptionPosition)}
+                options={[
+                  { value: "top", label: "Top" },
+                  { value: "center", label: "Center" },
+                  { value: "bottom", label: "Bottom" },
+                ]}
+              />
+              <CustomSelect
+                label="Style"
+                value={captionStudioStyle}
+                onChange={(val) => setCaptionStudioStyle(val as CaptionStyle)}
+                options={[
+                  { value: "modern", label: "Modern" },
+                  { value: "bold", label: "Bold" },
+                  { value: "minimal", label: "Minimal" },
+                  { value: "classic", label: "Classic" },
+                  { value: "cinematic", label: "Cinematic" },
+                ]}
+              />
             </div>
 
             <button className="btn btn-primary" style={{ ...S.btnPrimary, width: "100%", justifyContent: "center", padding: 12 }} onClick={handleProcessStudio} disabled={!selectedVideo || processingVideoId === selectedVideo?.id} type="button">
@@ -1556,18 +2121,20 @@ export default function App() {
             </button>
           </div>
 
-          <div style={S.card}>
+          <div className="slide-3d" style={S.card}>
             <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 20 }}>Preview</h2>
             {captionStudioPreview || selectedVideo?.processedVideoUrl ? (
-              <video
-                src={captionStudioPreview || selectedVideo?.processedVideoUrl}
-                controls
-                style={{ width: "100%", borderRadius: 12, background: "#0a0a0f" }}
-              />
+              <div className="video916" style={{ ...S.ratio916, borderRadius: 12 }}>
+                <video
+                  src={captionStudioPreview || selectedVideo?.processedVideoUrl}
+                  controls
+                  style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 12 }}
+                />
+              </div>
             ) : (
-              <div style={{ height: 280, background: "#0a0a0f", borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 12, color: "#6b6b7b" }}>
+              <div style={{ ...S.ratio916, borderRadius: 12, flexDirection: "column", gap: 12, color: "#6b6b7b" }}>
                 <Icon name="play" size={40} color="#2a2a3d" />
-                <span style={{ fontSize: 14 }}>Processed video will appear here</span>
+                <span style={{ fontSize: 14 }}>Processed 9:16 video will appear here</span>
               </div>
             )}
           </div>
@@ -1578,19 +2145,29 @@ export default function App() {
 
   const renderSettings = () => (
     <div className="fade-in" style={{ maxWidth: 600 }}>
-      <div style={S.card}>
+      <div className="slide-3d" style={S.card}>
         <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 24 }}>Planner Settings</h2>
 
         <div style={{ ...S.flexCol, gap: 20 }}>
-          <div>
-            <label style={S.label}>Default Platform</label>
-            <select className="input" style={S.input} value={selectedPlatform} onChange={(e) => setSelectedPlatform(e.target.value as ContentPlatform)}>
-              {contentPlatforms.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
+          <CustomSelect
+            label="Default Platform"
+            value={selectedPlatform}
+            onChange={(val) => setSelectedPlatform(val as ContentPlatform)}
+            options={contentPlatforms.map((p) => ({ value: p, label: p }))}
+          />
+
+          <div style={{ padding: 16, background: "#0a0a0f", borderRadius: 12, border: "1px solid #1e1e2d" }}>
+            <div style={{ ...S.flexBetween, marginBottom: 12 }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>AI Content Generation</div>
+                <div style={S.textMuted}>
+                  {GEMINI_API_KEY ? "Powered by Google Gemini. Active." : "Add VITE_GEMINI_API_KEY to your .env file to enable AI."}
+                </div>
+              </div>
+              <span style={{ ...S.badge, background: GEMINI_API_KEY ? "rgba(16,185,129,0.2)" : "rgba(245,158,11,0.2)", color: GEMINI_API_KEY ? "#10b981" : "#f59e0b" }}>
+                {GEMINI_API_KEY ? "Active" : "Setup Required"}
+              </span>
+            </div>
           </div>
 
           <div style={{ ...S.flexBetween, padding: "16px 0", borderTop: "1px solid #1e1e2d" }}>
@@ -1622,16 +2199,21 @@ export default function App() {
           </div>
 
           <div style={{ padding: "16px 0", borderTop: "1px solid #1e1e2d" }}>
-            <label style={S.label}>Caption Style</label>
-            <select className="input" style={S.input} value={captionStyle} onChange={(e) => setCaptionStyle(e.target.value)}>
-              <option value="modern">Modern</option>
-              <option value="classic">Classic</option>
-              <option value="minimal">Minimal</option>
-              <option value="bold">Bold</option>
-            </select>
+            <CustomSelect
+              label="Default Caption Style"
+              value={captionStyle}
+              onChange={(val) => setCaptionStyle(val as CaptionStyle)}
+              options={[
+                { value: "modern", label: "Modern" },
+                { value: "bold", label: "Bold" },
+                { value: "minimal", label: "Minimal" },
+                { value: "classic", label: "Classic" },
+                { value: "cinematic", label: "Cinematic" },
+              ]}
+            />
           </div>
 
-          <button className="btn btn-primary" style={{ ...S.btnPrimary, marginTop: 8, justifyContent: "center" }} onClick={() => setMessage("Settings saved locally.")} type="button">
+          <button className="btn btn-primary" style={{ ...S.btnPrimary, marginTop: 8, justifyContent: "center" }} onClick={() => addNotification("Settings saved.", "success")} type="button">
             Save Settings
           </button>
         </div>
@@ -1644,6 +2226,10 @@ export default function App() {
     <div style={S.wrap}>
       <style>{GLOBAL_CSS}</style>
 
+      {renderConfetti()}
+      {renderNotifications()}
+      {renderOnboarding()}
+
       <div className="overlay" style={{ ...S.overlay, display: sidebarOpen ? "block" : "none" }} onClick={() => setSidebarOpen(false)} />
 
       <aside className={`sidebar ${sidebarOpen ? "open" : ""}`} style={S.sidebar}>
@@ -1652,7 +2238,7 @@ export default function App() {
             <div style={S.logoIcon}>
               <Icon name="play" size={16} color="#fff" />
             </div>
-            <span style={{ fontWeight: 700, fontSize: 16, letterSpacing: "-0.5px" }}>AutoReel</span>
+            <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: "-0.5px" }}>{APP_NAME}</span>
           </div>
         </div>
 
@@ -1679,7 +2265,21 @@ export default function App() {
           ))}
         </nav>
 
-        <div style={S.sidebarFooter}>
+        <div style={{ ...S.sidebarFooter, display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ padding: 12, background: "#0a0a0f", borderRadius: 10, border: "1px solid #1e1e2d" }}>
+            <div style={{ ...S.flexBetween, marginBottom: 8 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: "#f1f1f4" }}>Plan</span>
+              <span style={{ ...S.badge, background: currentPlan === "pro" ? "rgba(139,92,246,0.2)" : "rgba(255,255,255,0.05)", color: currentPlan === "pro" ? "#c4b5fd" : "#6b6b7b" }}>
+                {currentPlan === "pro" ? "Pro" : "Free"}
+              </span>
+            </div>
+            {currentPlan === "free" && (
+              <button className="btn btn-primary" style={{ ...S.btnPrimary, width: "100%", justifyContent: "center", fontSize: 12, padding: "8px 12px" }} onClick={() => { setCurrentPlan("pro"); addNotification("Upgraded to Pro! Enjoy unlimited videos.", "success"); }} type="button">
+                <Icon name="star" size={12} />
+                Upgrade to Pro
+              </button>
+            )}
+          </div>
           <button className="btn btn-secondary" style={{ width: "100%", padding: 10, borderRadius: 10, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, ...S.btnSecondary }} type="button">
             <Icon name="log-out" size={16} />
             Sign Out
